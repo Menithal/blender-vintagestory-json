@@ -12,6 +12,7 @@ from . import animation
 import importlib
 importlib.reload(animation)
 
+VS_NO_MATERIAL = "VS_NO_MATERIAL"
 # convert deg to rad
 DEG_TO_RAD = math.pi / 180.0
 RAD_TO_DEG = 180.0 / math.pi
@@ -264,6 +265,7 @@ class FaceMaterial:
     """
     COLOR = 0
     TEXTURE = 1
+    NONE = 2
 
     # type enum, one of the integers above 
     type: int
@@ -294,6 +296,10 @@ def get_face_material(
         if material is not None:
             glow = material["glow"] if "glow" in material else 0
             color = get_material_color(material)
+            print(material)
+            if material.name is VS_NO_MATERIAL:
+                return FaceMaterial(FaceMaterial.NONE, name=material.name, color=default_color)
+
             if color is not None:
                 if isinstance(color, tuple):
                     return FaceMaterial(
@@ -315,10 +321,10 @@ def get_face_material(
                 
             # warn that material has no color or texture
             print(f"WARNING: {obj.name} material {material.name} has no color or texture")
-        
+    # If we end up here, material.name most likely is not possible to reach, lets not make it visible at all.
     return FaceMaterial(
-        FaceMaterial.COLOR,
-        name=material.name,
+        FaceMaterial.NONE,
+        name="unknown",
         color=default_color,
     )
 
@@ -636,7 +642,6 @@ def generate_element(
         
         face_material = get_face_material(obj, face.material_index)
         
-        # solid color tuple
         if face_material.type == FaceMaterial.COLOR and export_generated_texture:
             faces[d] = face_material # replace face with face material, will convert later
             if model_colors is not None:
