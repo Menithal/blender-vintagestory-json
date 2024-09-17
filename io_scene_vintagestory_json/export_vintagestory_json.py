@@ -12,6 +12,7 @@ from . import animation
 import importlib
 importlib.reload(animation)
 
+VS_NO_MATERIAL = "VS_NO_MATERIAL"
 # convert deg to rad
 DEG_TO_RAD = math.pi / 180.0
 RAD_TO_DEG = 180.0 / math.pi
@@ -267,6 +268,7 @@ class FaceMaterial:
     """
     COLOR = 0
     TEXTURE = 1
+    NONE = 2
 
     # type enum, one of the integers above 
     type: int
@@ -294,9 +296,13 @@ def get_face_material(
     if material_index < len(obj.material_slots):
         slot = obj.material_slots[material_index]
         material = slot.material
+        
         if material is not None:
             glow = material["glow"] if "glow" in material else 0
             color = get_material_color(material)
+            if material.name == VS_NO_MATERIAL:
+                return FaceMaterial(FaceMaterial.NONE, name=material.name, color=default_color)
+
             if color is not None:
                 if isinstance(color, tuple):
                     return FaceMaterial(
@@ -318,10 +324,11 @@ def get_face_material(
                 
             # warn that material has no color or texture
             print(f"WARNING: {obj.name} material {material.name} has no color or texture")
-        
+
+    # If we end up here, material.name most likely is not possible to reach, lets not make it visible at all.
     return FaceMaterial(
-        FaceMaterial.COLOR,
-        name=material.name,
+        FaceMaterial.NONE,
+        name="unknown",
         color=default_color,
     )
 
@@ -629,15 +636,15 @@ def generate_mesh_element(
     # ================================
 
     # initialize faces
-    faces = {
-        "north": {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False},
-        "east": {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False},
-        "south": {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False},
-        "west": {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False},
-        "up": {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False},
-        "down": {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False},
-    }
+    # we are doing it using an empty faces, as VS uses non-defined faces to define parts of the cuboid as "invisible"
+    default_starting = {"texture": "#0", "uv": [0, 0, 4, 4], "autoUv": False}
+    faces = {}
     
+    def upsert_face(d):
+        if d not in faces:
+            faces[d] = default_starting.copy()
+
+
     uv_layer = mesh.uv_layers.active.data
 
     for i, face in enumerate(mesh.polygons):
@@ -663,13 +670,14 @@ def generate_mesh_element(
         
         face_material = get_face_material(obj, face.material_index)
         
-        # solid color tuple
         if face_material.type == FaceMaterial.COLOR and export_generated_texture:
+            upsert_face(d)
             faces[d] = face_material # replace face with face material, will convert later
             if model_colors is not None:
                 model_colors.add(face_material.color)
         # texture
         elif face_material.type == FaceMaterial.TEXTURE:
+            upsert_face(d)
             faces[d]["texture"] = "#" + face_material.name
             model_textures[face_material.name] = face_material
 
@@ -1631,8 +1639,7 @@ def save_objects(
     - minify:
         Minimize output file size (write into single line, remove spaces, ...)
     - decimal_precision:
-        Number of digits after decimal to keep in numbers. Requires
-        `minify = True`. Set to -1 to disable.
+        Number of digits after decimal to keep in numbers. Set to -1 to disable.
     - export_armature:
         Export by bones, makes custom hierarchy based on bone tree and
         attaches generated elements to their bone parent.
@@ -1855,7 +1862,7 @@ def save_objects(
 
         faces = element["faces"]
         for d, f in faces.items():
-            if isinstance(f, FaceMaterial): # face is mapped to a solid color
+            if isinstance(f, FaceMaterial) and f is not FaceMaterial.NONE: # face is mapped to a solid color
                 if color_tex_uv_map is not None:
                     color_uv = color_tex_uv_map[f.color] if f.color in color_tex_uv_map else default_color_uv
                 else:
@@ -1908,24 +1915,60 @@ def save_objects(
         # remove json indent + newline
         indent= None
 
-        # go through json dict and replace all float with rounded strings
-        if decimal_precision >= 0:
-            def round_float(x):
-                return round(x, decimal_precision)
-            
-            def minify_element(elem):
-                elem["from"] = [round_float(x) for x in elem["from"]]
-                elem["to"] = [round_float(x) for x in elem["to"]]
-                elem["rotationOrigin"] = [round_float(x) for x in elem["rotationOrigin"]]
-                for face in elem["faces"].values():
-                    face["uv"] = [round_float(x) for x in face["uv"]]
-                
-                for child in elem["children"]:
-                    minify_element(child)
+    parameters_to_round = ["offsetX", "offsetY", "offsetZ", "rotationX", "rotationY", "rotationZ"]
+    # go through json dict and replace all float with rounded strings
+    if decimal_precision >= 0:
 
-            for elem in model_json["elements"]:
-                minify_element(elem)
-    
+        def normalize(d):
+            if minify == True: # remove trailing .0 as extreme minify
+                if isinstance(d, int):
+                    return d
+                if isinstance(d,float) and d.is_integer():
+                    return int(d)
+            return d
+
+
+        def round_float(x):
+            value = round(x, decimal_precision)
+            return normalize(value)
+        
+
+        def minify_element(elem):
+            elem["from"] = [round_float(x) for x in elem["from"]]
+            elem["to"] = [round_float(x) for x in elem["to"]]
+            elem["rotationOrigin"] = [round_float(x) for x in elem["rotationOrigin"]]
+            
+            for param in parameters_to_round:
+                if param in elem:
+                    elem[param] = round_float(elem[param])
+
+            for face in elem["faces"].values():
+                face["uv"] = [round_float(x) for x in face["uv"]]
+            
+            for child in elem["children"]:
+                minify_element(child)
+
+
+        def minify_frame(frame_elem):
+            for param in parameters_to_round:
+                if param in frame_elem:
+                    frame_elem[param] = round_float(frame_elem[param])
+
+
+        def minify_animations(anim):
+            for keyframe in anim["keyframes"]:
+                elements = keyframe["elements"]
+                for key in elements:
+                    minify_frame(elements[key])
+
+
+        for elem in model_json["elements"]:
+            minify_element(elem)
+
+        if "animations" in model_json:
+            for anim in model_json["animations"]:
+                minify_animations(anim)
+        
     # save json
     with open(filepath, "w") as f:
         json.dump(model_json, f, separators=(",", ":"), indent=indent)
