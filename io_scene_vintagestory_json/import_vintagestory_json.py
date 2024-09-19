@@ -345,8 +345,6 @@ def parse_element(
             bpy.ops.constraint.childof_clear_inverse(constraint="Child Of", owner="OBJECT")
             ## TODO: Possible add another temporary offset here.
 
-        
-
     return obj, v_min, new_cube_origin, new_rotation_origin
 
 
@@ -758,6 +756,7 @@ def load(context,
     # chunks of import file path, to get base directory
     filepath_parts = filepath.split(os.path.sep)
 
+
     # check if groups in .json, not a spec, used by this exporter as additional data to group models together
     if "groups" in data:
         groups = data["groups"]
@@ -904,7 +903,31 @@ def load(context,
         obj.select_set(False)
     for obj in all_objects:
         obj.select_set(True)
-    
+
+
+    # =============================================
+    # Collection
+    # =============================================
+
+
+    # Use the name of the filee to create a new collection 
+    # (as collections can be the main method to be used to separate model files in blender)
+    # and Organize / hide parts that we may not want to get updated, as some attachments
+    # may not have a common "root"'
+    name = filepath_parts[-1].replace(".json", "")
+    if name not in bpy.data.collections:
+        bpy.data.collections.new(name)
+        bpy.context.scene.collection.children.link(bpy.data.collections[name])
+
+    main_collection = bpy.data.collections[name]
+    for obj in all_objects:
+        # unlink from all collections (root)
+        for collection in obj.users_collection:
+            collection.objects.unlink(obj)
+        # link to main file based collection
+        main_collection.objects.link(obj)
+
+
     # print stats
     if debug_stats:
         t_end = time.process_time()
